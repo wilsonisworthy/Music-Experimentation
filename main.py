@@ -6,9 +6,10 @@ import matplotlib.pyplot as plt
 
 from dissonance_functions import sethares_dissonance
 from audio_playback import play_chord, stop_chord
+from instrument_spectra import INSTRUMENT_SOURCE_NOTES, INSTRUMENT_SPECTRA, scaled_spectrum
 from menu import clear_screen, select_from_menu
 
-DEFAULT_START_FREQ = 440.0  # A4
+DEFAULT_INSTRUMENT = "Violin"
 
 
 def _as_freq_amp_arrays(note) -> Tuple[List[float], List[float]]:
@@ -34,10 +35,12 @@ class DissonancePlot:
         base_note: Tuple[Sequence[float], Sequence[float]],
         offsets: Sequence[float],
         dissonance_values: Sequence[float],
+        title: str = "Dissonance vs. Interval",
     ) -> None:
         self.base_note = base_note
         self.offsets = np.asarray(offsets, dtype=float)
         self.dissonance_values = np.asarray(dissonance_values, dtype=float)
+        self.title = title
         self._is_pressed = False
         self._last_played_semitone = None
 
@@ -57,7 +60,7 @@ class DissonancePlot:
 
         ax.set_xlabel("Offset above base note (semitones)")
         ax.set_ylabel("Sensory dissonance")
-        ax.set_title("Dissonance vs. Interval  (hover to inspect, hold to hear)")
+        ax.set_title(f"{self.title}  (hover to inspect, hold to hear)")
         ax.set_xlim(float(self.offsets.min()), float(self.offsets.max()))
         top = float(self.dissonance_values.max())
         ax.set_ylim(0.0, top * 1.1 if top > 0 else 1.0)
@@ -156,6 +159,7 @@ def plot_dissonance_vs_offset(
     output_path: str = None,
     show: bool = True,
     interactive: bool = True,
+    title: str = "Dissonance vs. Interval",
 ) -> Tuple[List[float], List[float]]:
     """Plot (and optionally play) the dissonance between a note and a shifted copy of it.
 
@@ -177,7 +181,7 @@ def plot_dissonance_vs_offset(
         dissonance_values[i] = sethares_dissonance(base_note, shifted_note)
 
     if interactive:
-        plot = DissonancePlot(base_note, offsets, dissonance_values)
+        plot = DissonancePlot(base_note, offsets, dissonance_values, title=title)
         if output_path is not None:
             plot.fig.savefig(output_path, dpi=200, bbox_inches="tight")
         if show:
@@ -190,7 +194,7 @@ def plot_dissonance_vs_offset(
         plt.fill_between(offsets, dissonance_values, color="#3b6fb6", alpha=0.12)
         plt.xlabel("Offset above base note (semitones)")
         plt.ylabel("Sensory dissonance")
-        plt.title("Dissonance vs. Interval")
+        plt.title(title)
         plt.grid(True, alpha=0.25)
         plt.tight_layout()
         if output_path is not None:
@@ -205,13 +209,18 @@ def plot_dissonance_vs_offset(
 def build_parser() -> argparse.ArgumentParser:
     """Create a CLI parser for plotting dissonance vs. offset.
 
-    --start-freq is intentionally left without a default: passing it on the
+    --instrument is intentionally left without a default: passing it on the
     command line skips the interactive menu entirely (for scripting/testing);
     omitting it launches the arrow-key menu instead, which prompts for it.
     """
-    parser = argparse.ArgumentParser(description="Plot dissonance between a starting note and shifted copies of it.")
-    parser.add_argument("--start-freq", type=float, default=None, help="Base frequency for the starting note (Hz); skips the menu if given")
-    parser.add_argument("--start-amp", type=float, default=0.8, help="Amplitude for the starting note")
+    parser = argparse.ArgumentParser(description="Plot dissonance between an instrument's note and shifted copies of it.")
+    parser.add_argument(
+        "--instrument",
+        type=str,
+        default=None,
+        choices=sorted(INSTRUMENT_SPECTRA.keys()),
+        help="Instrument whose harmonic spectrum is used for the starting note; skips the menu if given",
+    )
     parser.add_argument("--min-offset", type=float, default=0.0, help="Minimum semitone offset (>= 0)")
     parser.add_argument("--max-offset", type=float, default=24.0, help="Maximum semitone offset")
     parser.add_argument("--steps", type=int, default=300, help="Number of samples to plot")
@@ -221,24 +230,17 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _prompt_for_start_freq(default: float = DEFAULT_START_FREQ) -> float:
-    while True:
-        raw = input(f"Enter base frequency in Hz [{default:g} = A4]: ").strip()
-        if not raw:
-            return default
-        try:
-            freq = float(raw)
-        except ValueError:
-            print("Please enter a numeric frequency.")
-            continue
-        if freq <= 0:
-            print("Frequency must be positive.")
-            continue
-        return freq
+def _prompt_for_instrument(default: str = DEFAULT_INSTRUMENT) -> str:
+    names = sorted(INSTRUMENT_SPECTRA.keys())
+    choice = select_from_menu(names, title="Choose an instrument:", selected=names.index(default))
+    if choice is None:
+        return default
+    return names[choice]
 
 
-def _generate_plot(args: argparse.Namespace, start_freq: float) -> None:
-    start_note = ([start_freq], [args.start_amp])
+def _generate_plot(args: argparse.Namespace, instrument: str) -> None:
+    fundamental_hz, _pitch_name = INSTRUMENT_SOURCE_NOTES[instrument]
+    start_note = scaled_spectrum(instrument, fundamental_hz)
     plot_dissonance_vs_offset(
         start_note,
         min_offset=max(0.0, args.min_offset),
@@ -247,11 +249,12 @@ def _generate_plot(args: argparse.Namespace, start_freq: float) -> None:
         output_path=args.output,
         show=not args.no_show,
         interactive=not args.no_interactive,
+        title=f"Dissonance vs. Interval -- {instrument}",
     )
 
 
 def _action_plot_dissonance(args: argparse.Namespace) -> None:
-    _generate_plot(args, _prompt_for_start_freq())
+    _generate_plot(args, _prompt_for_instrument())
 
 
 # Menu entries as (label, handler) pairs. To add a new feature later, write a
@@ -278,8 +281,8 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    if args.start_freq is not None:
-        _generate_plot(args, args.start_freq)
+    if args.instrument is not None:
+        _generate_plot(args, args.instrument)
         return
 
     run_menu(args)
